@@ -1,0 +1,12 @@
+.fileList {
+    margin-top: var(--theme-spacing-Full);
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--theme-spacing-Full);
+}
+
+.fileListHeader {
+    flex: 1 1 100%;
+    font-size: var(--theme-fontSize-base);
+}

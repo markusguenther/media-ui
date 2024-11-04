@@ -1,0 +1,37 @@
+:global(#media-ui-app > div) {
+    scrollbar-width: thin;
+    scrollbar-color: #999 transparent;
+}
+
+:global(#media-ui-app > div ::-webkit-scrollbar) {
+    width: 4px;
+    height: 4px;
+}
+
+:global(#media-ui-app > div ::-webkit-scrollbar-track) {
+    background: transparent;
+}
+
+:global(#media-ui-app > div ::-webkit-scrollbar-thumb) {
+    background-color: #999;
+}
+
+:global(#media-ui-app > div ::-webkit-scrollbar-corner) {
+    background-color: #3f3f3f;
+}
+
+:global(#media-ui-app [class*="_dropDown__btn"]) {
+    /* Hack to prevent module styles from adding a larger padding to the dropdown buttons than the components itself defines */
+    padding-left: 0;
+    /* Prevent cutting off collection breadcrumb in collection selection */
+    height: auto;
+}
+
+:global(.neos.neos-module-management-mediaui > .neos-module-wrap) {
+    padding: 3rem 1rem 0;
+}
+
+/* Hack to prevent a dropdown to be behind the bottom bar - issue #79 */
+:global(body > [class*="_selectBox__contents_"]) {
+    z-index: 99999;
+}

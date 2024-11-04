@@ -10,11 +10,12 @@ Neos:
             icon: 'fas fa-image'
             privilegeTarget: 'Flowpack.Media.Ui:ManageAssets'
             mainStylesheet: 'Minimal'
+            position: 'before media'
             additionalResources:
               javaScripts:
-                - 'resource://Flowpack.Media.Ui/Public/Assets/main.bundle.js'
+                Flowpack.Media.Ui: 'resource://Flowpack.Media.Ui/Public/Assets/main.bundle.js'
               styleSheets:
-                - 'resource://Flowpack.Media.Ui/Public/Assets/main.bundle.css'
+                Flowpack.Media.Ui: 'resource://Flowpack.Media.Ui/Public/Assets/main.bundle.css'
 
     userInterface:
       translation:
@@ -34,7 +35,7 @@ Neos:
         stylesheets:
           Flowpack.Media.Ui:AssetEditor:
             resource: resource://Flowpack.Media.Ui/Public/AssetEditor/Plugin.css
-
-      frontendConfiguration:
-        Flowpack.Media.Ui:
-          useNewMediaSelection: true
+          # Plugin.css is missing the styles for the Lightbox used for Asset Previews,
+          # so we have to include the main bundle as well
+          Flowpack.Media.Ui:Assets:
+            resource: resource://Flowpack.Media.Ui/Public/Assets/main.bundle.css

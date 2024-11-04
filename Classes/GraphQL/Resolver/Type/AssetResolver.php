@@ -1,4 +1,5 @@
 <?php
+/** @noinspection PhpUnusedParameterInspection */
 declare(strict_types=1);
 
 namespace Flowpack\Media\Ui\GraphQL\Resolver\Type;
@@ -13,15 +14,17 @@ namespace Flowpack\Media\Ui\GraphQL\Resolver\Type;
  * source code.
  */
 
+use Flowpack\Media\Ui\GraphQL\Context\AssetSourceContext;
 use Neos\Flow\Annotations as Flow;
 use Neos\Flow\ResourceManagement\ResourceManager;
 use Neos\Media\Domain\Model\Asset;
 use Neos\Media\Domain\Model\AssetCollection;
-use Neos\Media\Domain\Model\AssetInterface;
 use Neos\Media\Domain\Model\AssetSource\AssetProxy\AssetProxyInterface;
+use Neos\Media\Domain\Model\AssetSource\AssetProxy\ProvidesOriginalUriInterface;
 use Neos\Media\Domain\Model\AssetSource\AssetProxy\SupportsIptcMetadataInterface;
 use Neos\Media\Domain\Model\Tag;
 use Neos\Media\Domain\Repository\AssetRepository;
+use Neos\Media\Domain\Service\AssetService;
 use Neos\Media\Domain\Service\FileTypeIconService;
 use t3n\GraphQL\ResolverInterface;
 
@@ -49,23 +52,16 @@ class AssetResolver implements ResolverInterface
     protected $resourceManager;
 
     /**
-     * @var array<AssetInterface>
+     * @Flow\Inject
+     * @var AssetService
      */
-    protected array $localAssetData = [];
+    protected $assetService;
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
-     */
     public function id(AssetProxyInterface $assetProxy): ?string
     {
         return $assetProxy->getIdentifier();
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
-     */
     public function localId(AssetProxyInterface $assetProxy): ?string
     {
         return $assetProxy->getLocalAssetIdentifier();
@@ -73,13 +69,10 @@ class AssetResolver implements ResolverInterface
 
     /**
      * Returns the title of the associated local asset data or the label of the proxy as fallback
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
      */
-    public function label(AssetProxyInterface $assetProxy): ?string
+    public function label(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): ?string
     {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
+        $localAssetData = $assetSourceContext->getAssetForProxy($assetProxy);
         if ($localAssetData && $localAssetData->getTitle()) {
             return $localAssetData->getTitle();
         }
@@ -87,61 +80,56 @@ class AssetResolver implements ResolverInterface
     }
 
     /**
-     * Returns the locally stored assetdata for the given assetproxy if it exists. Remote assets have no local asset data.
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @return Asset|null
+     * Returns true if the asset is at least used once
      */
-    protected function getLocalAssetData(AssetProxyInterface $assetProxy): ?AssetInterface
+    public function isInUse(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): ?bool
     {
-        $localAssetIdentifier = $assetProxy->getLocalAssetIdentifier();
-
-        if (!$localAssetIdentifier) {
-            return null;
+        if (!$assetProxy->getLocalAssetIdentifier()) {
+            return false;
         }
-
-        if (array_key_exists($localAssetIdentifier, $this->localAssetData)) {
-            return $this->localAssetData[$localAssetIdentifier];
-        }
-
-        /** @var AssetInterface $localAsset */
-        $localAsset = $this->assetRepository->findByIdentifier($localAssetIdentifier);
-
-        return $this->localAssetData[$localAssetIdentifier] = $localAsset;
+        return $this->assetService->isInUse($assetSourceContext->getAssetForProxy($assetProxy));
     }
 
     /**
      * Returns the caption of the associated local asset data
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
      */
-    public function caption(AssetProxyInterface $assetProxy): ?string
+    public function caption(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): ?string
     {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
-        return $localAssetData ? $localAssetData->getCaption() : null;
+        $localAssetData = $assetSourceContext->getAssetForProxy($assetProxy);
+        return $localAssetData instanceof Asset ? $localAssetData->getCaption() : null;
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return bool
-     */
     public function imported(AssetProxyInterface $assetProxy): bool
     {
         // TODO: Find better way to make sure the asset originates from somewhere outside Neos
-        return (bool)$assetProxy->getLocalAssetIdentifier() && $assetProxy->getAssetSource()->getIdentifier() !== 'neos';
+        return $assetProxy->getLocalAssetIdentifier() && $assetProxy->getAssetSource()->getIdentifier() !== 'neos';
     }
 
     /**
+     * Returns a matching icon uri for the given asset-proxy
      *
-     * Returns a matching icon uri for the given assetproxy
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @return array
+     * @return array{
+     *     extension: string,
+     *     mediaType: string,
+     *     typeIcon: array{
+     *         width: int,
+     *         height: int,
+     *         url: string,
+     *         alt: string
+     *     },
+     *     size: int,
+     *     url: string
+     * }
      */
     public function file(AssetProxyInterface $assetProxy): array
     {
         $icon = $this->fileTypeIconService::getIcon($assetProxy->getFilename());
+
+        if ($assetProxy instanceof ProvidesOriginalUriInterface) {
+            $url = (string)$assetProxy->getOriginalUri();
+        } else {
+            $url = (string)$assetProxy->getPreviewUri();
+        }
 
         return [
             'extension' => $icon['alt'],
@@ -153,16 +141,12 @@ class AssetResolver implements ResolverInterface
                 'alt' => $icon['alt'],
             ],
             'size' => $assetProxy->getFileSize(),
-            'url' => $assetProxy->getPreviewUri(),
+            'url' => $url,
         ];
     }
 
     /**
      * Returns the iptc properties for assetproxies that implement the interface
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @param array $variables
-     * @return string|null
      */
     public function iptcProperty(AssetProxyInterface $assetProxy, array $variables): ?string
     {
@@ -171,10 +155,8 @@ class AssetResolver implements ResolverInterface
     }
 
     /**
-     * Returns the iptc properties for assetproxies that implement the interface
-     *
-     * @param AssetProxyInterface $assetProxy
-     * @return array
+     * Returns the iptc properties for asset-proxies that implement the interface
+     * @return array{propertyName: string, value: string}[]
      */
     public function iptcProperties(AssetProxyInterface $assetProxy): array
     {
@@ -187,92 +169,55 @@ class AssetResolver implements ResolverInterface
         return [];
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
-     */
-    public function copyrightNotice(AssetProxyInterface $assetProxy): ?string
+    public function copyrightNotice(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): ?string
     {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
-        return $localAssetData ? $localAssetData->getCopyrightNotice() : null;
+        $localAssetData = $assetSourceContext->getAssetForProxy($assetProxy);
+        return $localAssetData instanceof Asset ? $localAssetData->getCopyrightNotice() : null;
+    }
+
+    public function lastModified(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): ?string
+    {
+        return $assetProxy->getLastModified() ? $assetProxy->getLastModified()->format(DATE_W3C) : null;
     }
 
     /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string|null
+     * @return Tag[]
      */
-    public function lastModified(AssetProxyInterface $assetProxy): ?string
+    public function tags(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): array
     {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
-        return $localAssetData && $localAssetData->getLastModified() ? $localAssetData->getLastModified()->format(DATE_W3C) : null;
+        $localAssetData = $assetSourceContext->getAssetForProxy($assetProxy);
+        return $localAssetData instanceof Asset ? $localAssetData->getTags()->toArray() : [];
     }
 
     /**
-     * @param AssetProxyInterface $assetProxy
-     * @return array<Tag>
+     * @return AssetCollection[]
      */
-    public function tags(AssetProxyInterface $assetProxy): array
+    public function collections(AssetProxyInterface $assetProxy, array $variables, AssetSourceContext $assetSourceContext): array
     {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
-        return $localAssetData ? $localAssetData->getTags()->toArray() : [];
+        $localAssetData = $assetSourceContext->getAssetForProxy($assetProxy);
+        return $localAssetData instanceof Asset ? $localAssetData->getAssetCollections()->toArray() : [];
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return array<AssetCollection>
-     */
-    public function collections(AssetProxyInterface $assetProxy): array
-    {
-        $localAssetData = $this->getLocalAssetData($assetProxy);
-        return $localAssetData ? $localAssetData->getAssetCollections()->toArray() : [];
-    }
-
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return int
-     */
     public function width(AssetProxyInterface $assetProxy): int
     {
         return $assetProxy->getWidthInPixels() ?? 0;
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return int
-     */
     public function height(AssetProxyInterface $assetProxy): int
     {
         return $assetProxy->getHeightInPixels() ?? 0;
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string
-     */
     public function thumbnailUrl(AssetProxyInterface $assetProxy): string
     {
         return (string)$assetProxy->getThumbnailUri();
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @return string
-     */
     public function previewUrl(AssetProxyInterface $assetProxy): string
     {
         return (string)$assetProxy->getPreviewUri();
     }
 
-    /**
-     * @param AssetProxyInterface $assetProxy
-     * @param int $maximumWidth
-     * @param int $maximumHeight
-     * @param string $ratioMode
-     * @param bool $allowUpScaling
-     * @param bool $allowCropping
-     * @return array
-     * @throws \Exception
-     */
     public function thumbnail(
         AssetProxyInterface $assetProxy,
         int $maximumWidth,

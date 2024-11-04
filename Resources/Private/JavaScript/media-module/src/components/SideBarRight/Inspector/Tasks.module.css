@@ -1,0 +1,20 @@
+.tasks {
+    display: flex;
+    flex-direction: column;
+    gap: var(--theme-spacing-Half);
+}
+
+.buttonWrapper {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 1px;
+}
+
+.buttonWrapper button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--theme-spacing-Half);
+    max-width: var(--theme-unit);
+}

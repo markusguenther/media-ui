@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace Flowpack\Media\Ui\GraphQL\Resolver\Type;
@@ -13,22 +14,31 @@ namespace Flowpack\Media\Ui\GraphQL\Resolver\Type;
  * source code.
  */
 
+use Flowpack\Media\Ui\Domain\Model\AssetProxyIteratorAggregate;
+use Flowpack\Media\Ui\Exception as MediaUiException;
 use Flowpack\Media\Ui\GraphQL\Context\AssetSourceContext;
+use Flowpack\Media\Ui\Infrastructure\Neos\Media\AssetProxyIteratorBuilder;
+use Flowpack\Media\Ui\Service\AssetChangeLog;
+use Flowpack\Media\Ui\Service\AssetCollectionService;
+use Flowpack\Media\Ui\Service\SimilarityService;
+use Flowpack\Media\Ui\Service\UsageDetailsService;
 use Neos\Flow\Annotations as Flow;
+use Neos\Flow\Persistence\Doctrine\PersistenceManager;
+use Neos\Flow\Security\Authorization\PrivilegeManagerInterface;
 use Neos\Media\Domain\Model\Asset;
 use Neos\Media\Domain\Model\AssetCollection;
 use Neos\Media\Domain\Model\AssetSource\AssetProxy\AssetProxyInterface;
-use Neos\Media\Domain\Model\AssetSource\AssetProxyQueryInterface;
-use Neos\Media\Domain\Model\AssetSource\AssetProxyQueryResultInterface;
 use Neos\Media\Domain\Model\AssetSource\AssetSourceInterface;
-use Neos\Media\Domain\Model\AssetSource\AssetTypeFilter;
-use Neos\Media\Domain\Model\AssetSource\SupportsCollectionsInterface;
-use Neos\Media\Domain\Model\AssetSource\SupportsTaggingInterface;
+use Neos\Media\Domain\Model\AssetSource\Neos\NeosAssetProxy;
+use Neos\Media\Domain\Model\AssetSource\Neos\NeosAssetSource;
+use Neos\Media\Domain\Model\AssetVariantInterface;
 use Neos\Media\Domain\Model\Tag;
+use Neos\Media\Domain\Model\VariantSupportInterface;
 use Neos\Media\Domain\Repository\AssetCollectionRepository;
-use Neos\Media\Domain\Repository\AssetRepository;
 use Neos\Media\Domain\Repository\TagRepository;
+use Neos\Media\Domain\Service\AssetService;
 use Neos\Utility\Exception\FilesException;
+use Neos\Utility\Exception\PropertyNotAccessibleException;
 use Neos\Utility\Files;
 use Psr\Log\LoggerInterface;
 use t3n\GraphQL\ResolverInterface;
@@ -38,11 +48,6 @@ use t3n\GraphQL\ResolverInterface;
  */
 class QueryResolver implements ResolverInterface
 {
-    /**
-     * @Flow\Inject
-     * @var AssetRepository
-     */
-    protected $assetRepository;
 
     /**
      * @Flow\Inject
@@ -58,171 +63,222 @@ class QueryResolver implements ResolverInterface
 
     /**
      * @Flow\Inject
+     * @var AssetService
+     */
+    protected $assetService;
+
+    /**
+     * @Flow\Inject
      * @var LoggerInterface
      */
     protected $systemLogger;
 
     /**
+     * @Flow\Inject
+     * @var UsageDetailsService
+     */
+    protected $assetUsageService;
+
+    /**
+     * @Flow\Inject
+     * @var AssetChangeLog
+     */
+    protected $assetChangeLog;
+
+    /**
+     * @Flow\Inject
+     * @var SimilarityService
+     */
+    protected $similarityService;
+
+    /**
+     * @Flow\Inject
+     * @var PersistenceManager
+     */
+    protected $persistenceManager;
+
+    /**
+     * @Flow\InjectConfiguration(package="Flowpack.Media.Ui")
+     * @var array
+     */
+    protected $settings;
+
+    /**
+     * @Flow\Inject
+     * @var AssetProxyIteratorBuilder
+     */
+    protected $assetProxyIteratorBuilder;
+
+    /**
+     * @Flow\Inject
+     * @var PrivilegeManagerInterface
+     */
+    protected $privilegeManager;
+
+    /**
+     * @Flow\Inject
+     * @var AssetCollectionService
+     */
+    protected $assetCollectionService;
+
+    /**
      * Returns total count of asset proxies in the given asset source
-     *
-     * @param $_
-     * @param array $variables
-     * @param AssetSourceContext $assetSourceContext
-     * @return int
+     * @noinspection PhpUnusedParameterInspection
      */
     public function assetCount($_, array $variables, AssetSourceContext $assetSourceContext): int
     {
-        $query = $this->createAssetProxyQuery($variables, $assetSourceContext);
+        $iterator = $this->assetProxyIteratorBuilder->build($assetSourceContext, $variables);
 
-        if (!$query) {
+        if (!$iterator) {
             $this->systemLogger->error('Could not build asset query for given variables', $variables);
             return 0;
         }
 
-        try {
-            return $query->execute()->count();
-        } catch (\Exception $e) {
-            // TODO: Handle that not every asset source implements the count method => Introduce countable interface?
-        }
-        return 0;
+        return count($iterator);
     }
 
     /**
-     * Helper to create a asset proxy query for other methods
-     *
-     * @param array $variables
-     * @param AssetSourceContext $assetSourceContext
-     * @return AssetProxyQueryInterface|null
+     * Returns a list of accessible and inaccessible relations for the given asset
      */
-    protected function createAssetProxyQuery(
-        array $variables,
-        AssetSourceContext $assetSourceContext
-    ): ?AssetProxyQueryInterface {
+    public function assetUsageDetails($_, array $variables, AssetSourceContext $assetSourceContext): array
+    {
         [
+            'id' => $id,
             'assetSourceId' => $assetSourceId,
-            'tag' => $tag,
-            'assetCollection' => $assetCollection,
-            'mediaType' => $mediaType,
-            'searchTerm' => $searchTerm,
-        ] = $variables + [
-            'assetSourceId' => 'neos',
-            'tag' => null,
-            'assetCollection' => null,
-            'mediaType' => null,
-            'searchTerm' => null
-        ];
+        ] = $variables + ['id' => null, 'assetSourceId' => null];
 
-        $activeAssetSource = $assetSourceContext->getAssetSource($assetSourceId);
-        if (!$activeAssetSource) {
-            return null;
-        }
-        $assetProxyRepository = $activeAssetSource->getAssetProxyRepository();
+        $assetProxy = $assetSourceContext->getAssetProxy($id, $assetSourceId);
 
-        if (is_string($mediaType) && !empty($mediaType)) {
-            try {
-                $assetTypeFilter = new AssetTypeFilter(ucfirst($mediaType));
-                $assetProxyRepository->filterByType($assetTypeFilter);
-            } catch (\InvalidArgumentException $e) {
-                $this->systemLogger->warning('Ignoring invalid mediatype when filtering assets ' . $mediaType);
-            }
+        if (!$assetProxy || !$assetProxy->getLocalAssetIdentifier()) {
+            return [];
         }
 
-        if ($assetCollection && $assetProxyRepository instanceof SupportsCollectionsInterface) {
-            /** @var AssetCollection $assetCollection */
-            /** @noinspection PhpUndefinedMethodInspection */
-            $assetCollection = $this->assetCollectionRepository->findOneByTitle($assetCollection);
-            if ($assetCollection) {
-                $assetProxyRepository->filterByCollection($assetCollection);
-            }
+        $asset = $assetSourceContext->getAssetForProxy($assetProxy);
+
+        if (!$asset) {
+            return [];
         }
 
-        // TODO: Implement sorting via `SupportsSortingInterface`
+        return $this->assetUsageService->resolveUsagesForAsset($asset);
+    }
 
-        if ($tag && $assetProxyRepository instanceof SupportsTaggingInterface) {
-            $tag = $this->tagRepository->findOneByLabel($tag);
-            if ($tag) {
-                return $assetProxyRepository->findByTag($tag)->getQuery();
-            }
+    /**
+     * Returns the total usage count for the given asset
+     */
+    public function assetUsageCount($_, array $variables, AssetSourceContext $assetSourceContext): int
+    {
+        [
+            'id' => $id,
+            'assetSourceId' => $assetSourceId,
+        ] = $variables + ['id' => null, 'assetSourceId' => null];
+
+        $assetProxy = $assetSourceContext->getAssetProxy($id, $assetSourceId);
+
+        if (!$assetProxy || !$assetProxy->getLocalAssetIdentifier()) {
+            return 0;
         }
 
-        if (is_string($searchTerm) && !empty($searchTerm)) {
-            return $assetProxyRepository->findBySearchTerm($searchTerm)->getQuery();
+        $asset = $assetSourceContext->getAssetForProxy($assetProxy);
+
+        if (!$asset) {
+            return 0;
         }
 
-        return $assetProxyRepository->findAll()->getQuery();
+        return $this->assetService->getUsageCount($asset);
     }
 
     /**
      * Returns an array with helpful configurations for interacting with the API
-     *
-     * @param $_
-     * @return array
      */
     public function config($_): array
     {
+        $defaultAssetCollection = $this->assetCollectionService->getDefaultCollectionForCurrentSite();
+
         return [
             'uploadMaxFileSize' => $this->getMaximumFileUploadSize(),
+            'uploadMaxFileUploadLimit' => $this->getMaximumFileUploadLimit(),
+            'currentServerTime' => (new \DateTime())->format(DATE_W3C),
+            'defaultAssetCollectionId' => $defaultAssetCollection ? $this->persistenceManager->getIdentifierByObject($defaultAssetCollection) : null,
+            'canManageTags' => $this->privilegeManager->isPrivilegeTargetGranted('Flowpack.Media.Ui:ManageTags'),
+            'canManageAssetCollections' => $this->privilegeManager->isPrivilegeTargetGranted('Flowpack.Media.Ui:ManageAssetCollections'),
+            'canManageAssets' => $this->privilegeManager->isPrivilegeTargetGranted('Flowpack.Media.Ui:ManageAssets'),
         ];
     }
 
     /**
      * Returns the lowest configured maximum upload file size
-     *
-     * @return int
      */
     protected function getMaximumFileUploadSize(): int
     {
         try {
-            return (int)min(Files::sizeStringToBytes(ini_get('post_max_size')),
-                Files::sizeStringToBytes(ini_get('upload_max_filesize')));
+            return (int)min(
+                Files::sizeStringToBytes(ini_get('post_max_size')),
+                Files::sizeStringToBytes(ini_get('upload_max_filesize'))
+            );
         } catch (FilesException $e) {
             return 0;
         }
     }
 
     /**
+     * Returns the maximum number of files that can be uploaded
+     */
+    protected function getMaximumFileUploadLimit(): int
+    {
+        return (int)($this->settings['maximumFileUploadLimit'] ?? 10);
+    }
+
+    /**
      * Provides a filterable list of asset proxies. These are the main entities for media management.
-     *
-     * @param $_
-     * @param array $variables
-     * @param AssetSourceContext $assetSourceContext
-     * @return AssetProxyQueryResultInterface|null
      */
     public function assets(
         $_,
         array $variables,
         AssetSourceContext $assetSourceContext
-    ): ?AssetProxyQueryResultInterface {
-        $limit = array_key_exists('limit', $variables) ? $variables['limit'] : 20;
-        $offset = array_key_exists('offset', $variables) ? $variables['offset'] : 0;
+    ): ?AssetProxyIteratorAggregate {
+        ['limit' => $limit, 'offset' => $offset] = $variables + ['limit' => 20, 'offset' => 0];
+        $iterator = $this->assetProxyIteratorBuilder->build($assetSourceContext, $variables);
 
-        $query = $this->createAssetProxyQuery($variables, $assetSourceContext);
-
-        if (!$query) {
-            $this->systemLogger->error('Could not build asset query for given variables', $variables);
+        if (!$iterator) {
+            $this->systemLogger->error('Could not build assets query for given variables', $variables);
             return null;
         }
 
-        try {
-            // TODO: Check if it's an issue to execute the query a second time just to get the correct number of results?
-            $offset = $offset < $query->execute()->count() ? $offset : 0;
-        } catch (\Exception $e) {
-            // TODO: Handle that not every asset source implements the count method => Introduce countable interface?
-        }
+        $iterator->setOffset($offset);
+        $iterator->setLimit($limit);
 
-        $query->setOffset($offset);
-        $query->setLimit($limit);
+        return $iterator;
+    }
 
-        // TODO: It's not possible to use `toArray` here as not all asset sources implement it
-        return $query->execute();
+    /**
+     * Provides a list of all unused assets in local asset source
+     * @return AssetProxyInterface[]
+     * @throws MediaUiException
+     */
+    public function unusedAssets($_, array $variables, AssetSourceContext $assetSourceContext): array
+    {
+        ['limit' => $limit, 'offset' => $offset] = $variables + ['limit' => 20, 'offset' => 0];
+
+        /** @var NeosAssetSource $neosAssetSource */
+        $neosAssetSource = $assetSourceContext->getAssetSource('neos');
+
+        return array_map(static function ($asset) use ($neosAssetSource) {
+            return new NeosAssetProxy($asset, $neosAssetSource);
+        }, $this->assetUsageService->getUnusedAssets($limit, $offset));
+    }
+
+    /**
+     * Provides number of unused assets in local asset source
+     * @throws MediaUiException
+     */
+    public function unusedAssetCount(): int
+    {
+        return $this->assetUsageService->getUnusedAssetCount();
     }
 
     /**
      * Provides a list of all tags
-     *
-     * @param $_
-     * @param array $variables
-     * @return array<Tag>
+     * @return Tag[]
      */
     public function tags($_, array $variables): array
     {
@@ -230,12 +286,19 @@ class QueryResolver implements ResolverInterface
     }
 
     /**
+     * Get tag by id
+     */
+    public function tag($_, array $variables): ?Tag
+    {
+        $id = $variables['id'] ?? null;
+        /** @var Tag $tag */
+        $tag = $id ? $this->tagRepository->findByIdentifier($id) : null;
+        return $tag;
+    }
+
+    /**
      * Returns the list of all registered asset sources. By default the asset source `neos` should always exist.
-     *
-     * @param $_
-     * @param array $variables
-     * @param AssetSourceContext $assetSourceContext
-     * @return array<AssetSourceInterface>
+     * @return AssetSourceInterface[]
      */
     public function assetSources($_, array $variables, AssetSourceContext $assetSourceContext): array
     {
@@ -243,9 +306,8 @@ class QueryResolver implements ResolverInterface
     }
 
     /**
-     * @param $_
-     * @param array $variables
-     * @return array<AssetCollection>
+     * Returns all asset collections
+     * @return AssetCollection[]
      */
     public function assetCollections($_, array $variables): array
     {
@@ -253,19 +315,102 @@ class QueryResolver implements ResolverInterface
     }
 
     /**
-     * @param $_
-     * @param array $variables
-     * @param AssetSourceContext $assetSourceContext
-     * @return AssetProxyInterface|null
+     * Returns an asset collection by id
      */
-    public function asset($_, array $variables, AssetSourceContext $assetSourceContext): ?Asset
+    public function assetCollection($_, array $variables): ?AssetCollection
+    {
+        $id = $variables['id'] ?? null;
+        /** @var AssetCollection $assetCollection */
+        $assetCollection = $id ? $this->assetCollectionRepository->findByIdentifier($id) : null;
+        return $assetCollection;
+    }
+
+    /**
+     * Returns an asset proxy by id
+     */
+    public function asset($_, array $variables, AssetSourceContext $assetSourceContext): ?AssetProxyInterface
     {
         [
             'id' => $id,
             'assetSourceId' => $assetSourceId,
         ] = $variables + ['id' => null, 'assetSourceId' => null];
 
-        $activeAssetSource = $assetSourceContext->getAssetSource($assetSourceId);
-        return $activeAssetSource ? $activeAssetSource->getAssetProxyRepository()->getAssetProxy($id) : null;
+        return $assetSourceContext->getAssetProxy($id, $assetSourceId);
+    }
+
+    /**
+     * Retrieves the variants of an asset
+     * @return AssetVariantInterface[]
+     */
+    public function assetVariants($_, array $variables, AssetSourceContext $assetSourceContext): array
+    {
+        $assetProxy = $this->asset($_, $variables, $assetSourceContext);
+        if (!($assetProxy instanceof NeosAssetProxy) || !($assetProxy->getAsset() instanceof VariantSupportInterface)) {
+            return [];
+        }
+        $asset = $this->persistenceManager->getObjectByIdentifier($assetProxy->getLocalAssetIdentifier(), Asset::class);
+
+        /** @var VariantSupportInterface $originalAsset */
+        $originalAsset = ($asset instanceof AssetVariantInterface ? $asset->getOriginalAsset() : $asset);
+
+        return $originalAsset->getVariants();
+    }
+
+    /**
+     * Returns a list of changes to assets since a given timestamp
+     */
+    public function changedAssets($_, array $variables): array
+    {
+        /** @var string $since */
+        $since = $variables['since'] ?? null;
+        $changes = $this->assetChangeLog->getChanges();
+
+        $filteredChanges = [];
+        $lastModified = null;
+        foreach ($changes as $change) {
+            if ($since !== null && $change['lastModified'] <= $since) {
+                continue;
+            }
+            if ($lastModified === null || $change['lastModified'] > $lastModified) {
+                $lastModified = $change['lastModified'];
+            }
+            $filteredChanges[] = $change;
+        }
+
+        return [
+            'lastModified' => $lastModified,
+            'changes' => $filteredChanges,
+        ];
+    }
+
+    /**
+     * Returns a list of similar asset to the given asset
+     * @return AssetProxyInterface[]
+     * @throws PropertyNotAccessibleException
+     */
+    public function similarAssets($_, array $variables, AssetSourceContext $assetSourceContext): array
+    {
+        [
+            'id' => $id,
+            'assetSourceId' => $assetSourceId,
+        ] = $variables + ['id' => null, 'assetSourceId' => null];
+
+        $assetProxy = $assetSourceContext->getAssetProxy($id, $assetSourceId);
+
+        if (!$assetProxy) {
+            return [];
+        }
+
+        $asset = $assetSourceContext->getAssetForProxy($assetProxy);
+
+        if (!$asset) {
+            return [];
+        }
+
+        $similarAssets = $this->similarityService->getSimilarAssets($asset);
+        return array_map(function ($asset) use ($assetSourceContext) {
+            $assetId = $this->persistenceManager->getIdentifierByObject($asset);
+            return $assetSourceContext->getAssetProxy($assetId, $asset->getAssetSourceIdentifier());
+        }, $similarAssets);
     }
 }

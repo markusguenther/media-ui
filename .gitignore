@@ -6,13 +6,24 @@
 #
 # Application & development dependencies.
 #
-/node_modules
+node_modules
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+Packages
+vendor
+composer.lock
+/.parcel-cache
 
 #
 # Compiled assets.
 #
-/.cache
-Resources/Private/JavaScript/dev/dist
+.cache
+Resources/Private/JavaScript/dev-server/dist
 yarn-error.log
 
 #
@@ -20,3 +31,4 @@ yarn-error.log
 #
 .vscode/
 .idea/
+/screenshots

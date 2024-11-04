@@ -8,25 +8,48 @@ type Query {
     all assets that match the given criteria
     """
     assets(
-        assetSourceId: AssetSourceId,
-        tag: TagLabel,
-        assetCollectionId: AssetCollectionId,
-        mediaType: MediaType,
-        searchTerm: String,
-        limit: Int,
+        assetSourceId: AssetSourceId
+        tagId: TagId
+        assetCollectionId: AssetCollectionId
+        assetType: AssetType
+        mediaType: MediaType
+        searchTerm: String
+        limit: Int
         offset: Int
+        sortBy: SortBy
+        sortDirection: SortDirection
     ): [Asset!]!
 
     """
     number of assets matching the given criteria
     """
     assetCount(
-        assetSourceId: AssetSourceId,
-        tag: TagLabel,
-        assetCollectionId: AssetCollectionId,
-        mediaType: MediaType,
+        assetSourceId: AssetSourceId
+        tagId: TagId
+        assetCollectionId: AssetCollectionId
+        assetType: AssetType
+        mediaType: MediaType
         searchTerm: String
     ): Int!
+
+    """
+    all asset varinats for given asset
+    """
+    assetVariants(id: AssetId!, assetSourceId: AssetSourceId!): [AssetVariant!]!
+
+    """
+    unused local assets
+
+    NOTE: This query is only available when `Flowpack.Neos.AssetUsage` is installed
+    """
+    unusedAssets(limit: Int, offset: Int): [Asset!]!
+
+    """
+    number of unused assets
+
+    NOTE: This query is only available when `Flowpack.Neos.AssetUsage` is installed
+    """
+    unusedAssetCount: Int!
 
     """
     all configured asset sources (by default only the "neos" source)
@@ -39,58 +62,112 @@ type Query {
     assetCollections: [AssetCollection!]!
 
     """
+    a single asset collection by its id, or null if no corresponding collection exists
+    """
+    assetCollection(id: AssetCollectionId!): AssetCollection
+
+    """
+    usages for a single asset
+    """
+    assetUsageDetails(id: AssetId!, assetSourceId: AssetSourceId!): [UsageDetailsGroup!]!
+
+    """
+    usage count for a single asset
+    """
+    assetUsageCount(id: AssetId!, assetSourceId: AssetSourceId!): Int!
+
+    """
+    list of recently changed asset ids, and the time & type of the change
+    // TODO: Make this more generic as other entities like Tags and Collections can change too
+    """
+    changedAssets(since: DateTime): ChangedAssetsResult!
+
+    """
+    list of assets which have some kind of similarity to the provided asset
+    """
+    similarAssets(id: AssetId!, assetSourceId: AssetSourceId!): [Asset!]!
+
+    """
     all tags
     """
     tags: [Tag!]!
 
+    """
+    a single tag by its id, or null if no corresponding tag exists
+    """
+    tag(id: TagId!): Tag
+
+    """
+    server side runtime configuration
+    """
     config: Config!
 }
 
 type Mutation {
     updateAsset(
-        id: AssetId!,
-        assetSourceId: AssetSourceId!,
-        label: String,
-        caption: String,
+        id: AssetId!
+        assetSourceId: AssetSourceId!
+        label: String
+        caption: String
         copyrightNotice: String
     ): Asset!
 
-    deleteAsset(
-        id: AssetId!,
+    deleteAsset(id: AssetId!, assetSourceId: AssetSourceId!): DeleteAssetResult!
+
+    replaceAsset(
+        id: AssetId!
         assetSourceId: AssetSourceId!
-    ): Boolean!
-
-    tagAsset(
-        id: AssetId!,
-        assetSourceId: AssetSourceId!,
-        tag: TagLabel
-    ): Asset!
-
-    untagAsset(
-        id: AssetId!,
-        assetSourceId: AssetSourceId!,
-        tag: TagLabel
-    ): Asset!
-
-    uploadFile(
         file: Upload!
+        options: AssetReplacementOptionsInput!
     ): FileUploadResult!
 
-    uploadFiles(
-        files: [Upload!]!
-    ): [FileUploadResult!]!
-
-    importAsset(
-        id: AssetId!,
+    editAsset(
+        id: AssetId!
         assetSourceId: AssetSourceId!
-    ): Asset!
+        filename: Filename!
+        options: AssetEditOptionsInput!
+    ): Boolean!
+
+    tagAsset(id: AssetId!, assetSourceId: AssetSourceId!, tagId: TagId!): Asset!
+
+    untagAsset(id: AssetId!, assetSourceId: AssetSourceId!, tagId: TagId!): Asset!
+
+    setAssetTags(id: AssetId!, assetSourceId: AssetSourceId!, tagIds: [TagId!]!): Asset!
+
+    setAssetCollections(id: AssetId!, assetSourceId: AssetSourceId!, assetCollectionIds: [AssetCollectionId!]!): Boolean!
+
+    deleteTag(id: TagId!): Boolean!
+
+    createTag(label: TagLabel!, assetCollectionId: AssetCollectionId): Tag!
+
+    uploadFile(file: Upload!, tagId: TagId, assetCollectionId: AssetCollectionId): FileUploadResult!
+
+    uploadFiles(files: [Upload!]!, tagId: TagId, assetCollectionId: AssetCollectionId): [FileUploadResult!]!
+
+    importAsset(id: AssetId!, assetSourceId: AssetSourceId!): Asset!
+
+    createAssetCollection(title: String!, parent: AssetCollectionId): AssetCollection!
+
+    deleteAssetCollection(id: AssetCollectionId!): Boolean!
+
+    updateAssetCollection(id: AssetCollectionId!, title: String, tagIds: [TagId]): Boolean!
+
+    setAssetCollectionParent(id: AssetCollectionId!, parent: AssetCollectionId): Boolean!
+
+    updateTag(id: TagId!, label: String): Tag!
 }
 
 """
 Configuration object containing helpful parameters for API interaction
 """
 type Config {
-    uploadMaxFileSize: Int
+    uploadMaxFileSize: FileSize!
+    uploadMaxFileUploadLimit: Int!
+    currentServerTime: DateTime!
+    defaultAssetCollectionId: AssetCollectionId
+    canManageAssetCollections: Boolean!
+    canManageTags: Boolean!
+    canManageAssets: Boolean!
 }
 
 """
@@ -98,9 +175,10 @@ An asset (Image, Document, Video or Audio)
 """
 type Asset {
     id: AssetId!
-    localId: LocalAssetId!
+    localId: LocalAssetId
     assetSource: AssetSource!
     imported: Boolean!
+    isInUse: Boolean!
 
     label: String!
     caption: String
@@ -126,6 +204,53 @@ type Asset {
 }
 
 """
+An asset variant
+"""
+type AssetVariant {
+    id: AssetId!
+    # width in pixels
+    width: Int!
+    # height in pixels
+    height: Int!
+    previewUrl: Url!
+    presetIdentifier: VariantPresetIdentifier
+    variantName: VariantName
+    hasCrop: Boolean!
+    cropInformation: CropInformation!
+}
+
+type CropInformation {
+    width: Int
+    height: Int
+    x: Int
+    y: Int
+}
+
+type UsageDetailsGroup {
+    serviceId: ServiceId!
+    label: String!
+    metadataSchema: [UsageDetailsMetadataSchema!]!
+    usages: [UsageDetails!]!
+}
+
+type UsageDetailsMetadataSchema {
+    name: MetadataName!
+    label: String!
+    type: UsageDetailsMetadataType!
+}
+
+type UsageDetails {
+    label: String!
+    url: String
+    metadata: [UsageDetailsMetadata!]!
+}
+
+type UsageDetailsMetadata {
+    name: MetadataName!
+    value: String
+}
+
+"""
 The file-representation of an asset including its type and (if available) the URL
 """
 type File {
@@ -137,21 +262,25 @@ type File {
 }
 
 """
-A tag to which assets can be assigned. Can have parent and child tags
+A tag to which assets can be assigned
 """
 type Tag {
+    id: TagId!
     label: TagLabel!
-    parent: Tag
-    children: [Tag!]!
 }
 
 """
 A collection of assets. One asset can belong to multiple collections
 """
 type AssetCollection {
+    id: AssetCollectionId
     title: AssetCollectionTitle!
     assets: [Asset!]!
+    parent: AssetCollection
     tags: [Tag!]!
+    assetCount: Int!
+    path: AssetCollectionPath
+    canDelete: Boolean!
 }
 
 """
@@ -165,6 +294,21 @@ type AssetSource {
     readOnly: Boolean!
     supportsTagging: Boolean!
     supportsCollections: Boolean!
+}
+
+"""
+Options for asset replacement
+"""
+input AssetReplacementOptionsInput {
+    generateRedirects: Boolean!
+    keepOriginalFilename: Boolean!
+}
+
+"""
+Options for asset editing
+"""
+input AssetEditOptionsInput {
+    generateRedirects: Boolean!
 }
 
 """
@@ -185,6 +329,11 @@ type Image {
     alt: String
 }
 
+type DeleteAssetResult {
+    success: Boolean!
+    messages: [String!]!
+}
+
 """
 The result of a single file upload
 """
@@ -192,6 +341,45 @@ type FileUploadResult {
     filename: Filename!
     success: Boolean!
     result: String!
+}
+
+"""
+The result of the changed assets query containing the hash of the last change and all changed asset ids
+"""
+type ChangedAssetsResult {
+    lastModified: DateTime
+    changes: [AssetChange!]!
+}
+
+"""
+One single change to an asset
+TODO: Include assetSourceId, currently changes only happen in the Neos asset source, but might happen somewhere else too
+"""
+type AssetChange {
+    lastModified: DateTime!
+    assetId: AssetId!
+    type: AssetChangeType!
+}
+
+"""
+The type of a change to an asset
+"""
+enum AssetChangeType {
+    ASSET_CREATED
+    ASSET_UPDATED
+    ASSET_REPLACED
+    ASSET_REMOVED
+}
+
+"""
+Data types for usage details metadata
+"""
+enum UsageDetailsMetadataType {
+    TEXT
+    DATE
+    DATETIME
+    URL
+    JSON
 }
 
 """
@@ -208,6 +396,32 @@ enum RatioMode {
     Consider an image of 320/480 being scaled to 50/50: the image will be scaled to height 50, then centered and cropped so the width will also be 50.
     """
     OUTBOUND
+}
+
+"""
+Fields to sort assets by
+"""
+enum SortBy {
+    """
+    The resource file name
+    """
+    name
+    """
+    Last modification date
+    """
+    lastModified
+    """
+    The resource file size
+    """
+    size
+}
+
+"""
+Direction to sort fields in
+"""
+enum SortDirection {
+    ASC
+    DESC
 }
 
 """
@@ -231,9 +445,24 @@ Unique identifier of an Asset collection (e.g. "neos")
 scalar AssetCollectionId
 
 """
+Absolute path of an Asset collection (e.g. "/photos/trees")
+"""
+scalar AssetCollectionPath
+
+"""
+Headers for asset usage metadata
+"""
+scalar UsageDetailsHeaders
+
+"""
 IANA media type of an Asset (e.g. "image/jpeg")
 """
 scalar MediaType
+
+"""
+Neos type of an Asset, can be "All", "Image", "Document", "Video" or "Audio" (see `Neos\Media\Domain\Model\AssetSource\AssetTypeFilter`)
+"""
+scalar AssetType
 
 """
 A File extension (e.g. "pdf")
@@ -261,14 +490,23 @@ Name of an IPTC metadata property (e.g. "Creator", see https://www.iptc.org/)
 scalar IptcPropertyName
 
 """
-The title of an Asset collection
+The title of an Asset collection (e.g. "slideshows")
 """
 scalar AssetCollectionTitle
+
+scalar ServiceId
+
+scalar MetadataName
 
 """
 An absolute or relative URL
 """
 scalar Url
+
+"""
+The id of a tag
+"""
+scalar TagId
 
 """
 The label of a tag
@@ -279,6 +517,16 @@ scalar TagLabel
 A file upload from the browser
 """
 scalar Upload
+
+"""
+Variant Preset Identifier
+"""
+scalar VariantPresetIdentifier
+
+"""
+Variant Name
+"""
+scalar VariantName
 
 schema {
     query: Query

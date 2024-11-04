@@ -1,0 +1,25 @@
+.assetCollectionTree {
+    border: 1px solid var(--theme-colors-border);
+    max-height: 600px;
+    display: flex;
+    flex-direction: column;
+}
+
+.assetCollectionTree > * {
+    display: block;
+}
+
+.viewSelection [role="button"] > * {
+    width: auto;
+    margin-right: var(--theme-spacing-Half);
+}
+
+.toolbar {
+    border-top: 1px solid var(--theme-colors-border);
+}
+
+.tree {
+    border-top: 1px solid var(--theme-colors-border);
+    overflow: auto;
+}
+

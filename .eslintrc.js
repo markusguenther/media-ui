@@ -1,52 +1,49 @@
 module.exports = {
+    root: true,
     parser: '@typescript-eslint/parser',
+    parserOptions: {
+        ecmaFeatures: { jsx: true },
+    },
     extends: [
         'eslint:recommended',
         'plugin:@typescript-eslint/recommended',
-        'prettier/@typescript-eslint',
-        'plugin:prettier/recommended',
         'plugin:react/recommended',
-        'plugin:testcafe/recommended'
+        'plugin:testcafe/recommended',
+        'plugin:prettier/recommended',
     ],
-    plugins: [
-        '@typescript-eslint',
-        'testcafe',
-        'prettier',
-        'react',
-        'react-hooks'
-    ],
-    /*parserOptions: {
-      jsx: true,
-      useJSXTextNode: true
-    },*/
+    plugins: ['@typescript-eslint', 'testcafe', 'prettier', 'react', 'react-hooks'],
     settings: {
         react: {
-            version: 'detect'
-        }
+            version: 'detect',
+        },
     },
     env: {
         browser: true,
-        es6: true,
-        node: true
+        es2020: true,
+        node: true,
     },
-    ignorePatterns: ['.cache', 'dist', 'node_modules/'],
+    ignorePatterns: ['.cache', '.parcel-cache', 'dist'],
     rules: {
-        '@typescript-eslint/indent': ['error', 4],
-        "@typescript-eslint/explicit-function-return-type": "off",
+        '@typescript-eslint/explicit-function-return-type': 'off',
+        '@typescript-eslint/explicit-module-boundary-types': 'off',
         '@typescript-eslint/no-explicit-any': 'off',
+        '@typescript-eslint/no-unused-vars': [
+            'warn',
+            {
+                args: 'none', // FIXME: Eslint shows warnings for used interfaces
+            },
+        ],
         '@typescript-eslint/no-var-requires': 'off',
         '@typescript-eslint/ban-ts-ignore': 'off',
-        'prettier/prettier': ['error', {
-            semi: true,
-            singleQuote: true,
-            tabWidth: 4,
-            printWidth: 120
-        }],
-        "react-hooks/rules-of-hooks": "error",
-        "react-hooks/exhaustive-deps": [
-            "warn", {
-                "additionalHooks": "useRecoilCallback"
-            }
-        ]
-    }
+        '@typescript-eslint/ban-ts-comment': 'off',
+        'no-unused-vars': 'off',
+        'prettier/prettier': ['error'],
+        'react-hooks/rules-of-hooks': 'error',
+        'react-hooks/exhaustive-deps': [
+            'warn',
+            {
+                additionalHooks: 'useRecoilCallback',
+            },
+        ],
+    },
 };
